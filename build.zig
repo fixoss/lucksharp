@@ -24,7 +24,11 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const glfw_dep = b.dependency("mach_glfw", .{ .target = exe.target, .optimize = exe.optimize });
+    // Use mach-glfw
+    const glfw_dep = b.dependency("mach_glfw", .{
+        .target = exe.target,
+        .optimize = exe.optimize,
+    });
     exe.addModule("mach-glfw", glfw_dep.module("mach-glfw"));
     @import("mach_glfw").link(glfw_dep.builder, exe);
 
