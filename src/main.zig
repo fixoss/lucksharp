@@ -1,8 +1,8 @@
 const std = @import("std");
-const lucksharpApp = @import("lucksharp.zig").lucksharpApp;
+const lucksharpapp = @import("lucksharpapp.zig");
 
 pub fn main() !void {
-    var app = try lucksharpApp.init();
+    var app = try lucksharpapp.init();
     defer app.deinit();
     app.run() catch |err| {
         std.log.err("application exited with error: {any}", .{err});
