@@ -11,11 +11,11 @@ const InstanceDispatch = vk.InstanceWrapper(.{
 });
 
 vkb: BaseDispatch = undefined,
-vbi: InstanceDispatch = undefined,
+vki: InstanceDispatch = undefined,
 instance: vk.Instance = .null_handle,
 
-pub fn createInstance(glfwGetInstanceAddrFunc: *const fn () void, glfwExtensions: ?[][*:0]const u8) !Self {
-    var self = Self;
+pub fn createInstance(glfwGetInstanceAddrFunc: *const fn (instance: vk.Instance, procname: [*:0]const u8) callconv(.C) ?*const fn () callconv(.C) void, glfwExtensions: ?[][*:0]const u8) !Self {
+    var self = Self{};
 
     const vk_proc = @as(*const fn (instance: vk.Instance, procname: [*:0]const u8) callconv(.C) vk.PfnVoidFunction, glfwGetInstanceAddrFunc);
     self.vkb = try BaseDispatch.load(vk_proc);
@@ -33,8 +33,8 @@ pub fn createInstance(glfwGetInstanceAddrFunc: *const fn () void, glfwExtensions
         .p_application_info = &app_info,
         .enabled_layer_count = 0,
         .pp_enabled_layer_names = undefined,
-        .enabled_extension_count = @as(u32, @intCast(glfwExtensions.len)),
-        .pp_enabled_extension_names = glfwExtensions.ptr,
+        .enabled_extension_count = @as(u32, @intCast(glfwExtensions.?.len)),
+        .pp_enabled_extension_names = glfwExtensions.?.ptr,
     };
 
     self.instance = try self.vkb.createInstance(&create_info, null);
@@ -42,4 +42,10 @@ pub fn createInstance(glfwGetInstanceAddrFunc: *const fn () void, glfwExtensions
     self.vki = try InstanceDispatch.load(self.instance, vk_proc);
 
     return self;
+}
+
+pub fn destroyInstance(self: *Self) void {
+    if (self.instance != .null_handle) {
+        self.vki.destroyInstance(self.instance, null);
+    }
 }
