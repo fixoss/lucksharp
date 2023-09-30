@@ -17,7 +17,7 @@ pub fn build(b: *std.Build) void {
         .target = exe.target,
         .optimize = exe.optimize,
     });
-    exe.addModule("mach-glfw", glfw_dep.module("mach-glfw"));
+    exe.addModule("glfw", glfw_dep.module("mach-glfw"));
     @import("mach_glfw").link(glfw_dep.builder, exe);
 
     // add vulkan-zig dependency
@@ -41,7 +41,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    unit_tests.addModule("mach-glfw", glfw_dep.module("mach-glfw"));
+    unit_tests.addModule("glfw", glfw_dep.module("mach-glfw"));
     unit_tests.addModule("vulkan", vulkan_gen.getModule());
 
     const run_unit_tests = b.addRunArtifact(unit_tests);

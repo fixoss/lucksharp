@@ -1,4 +1,16 @@
+const builtin = @import("builtin");
+const std = @import("std");
 const vk = @import("vulkan");
+const glfw = @import("glfw");
+
+const Allocator = std.mem.Allocator;
+
+const validation_layers = [_][*:0]const u8{"VK_LAYER_KHRONOS_validation"};
+
+const enable_validation_layers: bool = switch (builtin.mode) {
+    .Debug, .ReleaseSafe => true,
+    else => false,
+};
 
 const Self = @This();
 
@@ -7,17 +19,21 @@ const BaseDispatch = vk.BaseWrapper(.{
 });
 
 const InstanceDispatch = vk.InstanceWrapper(.{
+    .createDebugUtilsMessengerEXT = enable_validation_layers,
+    .destroyDebugUtilsMessengerEXT = enable_validation_layers,
     .destroyInstance = true,
 });
 
 vkb: BaseDispatch = undefined,
 vki: InstanceDispatch = undefined,
 instance: vk.Instance = .null_handle,
+debug_messenger: vk.DebugUtilsMessengerEXT = .null_handle,
 
-pub fn createInstance(glfwGetInstanceAddrFunc: *const fn (instance: vk.Instance, procname: [*:0]const u8) callconv(.C) ?*const fn () callconv(.C) void, glfwExtensions: ?[][*:0]const u8) !Self {
+pub fn createInstance(allocator: Allocator) !Self {
     var self = Self{};
 
-    const vk_proc = @as(*const fn (instance: vk.Instance, procname: [*:0]const u8) callconv(.C) vk.PfnVoidFunction, glfwGetInstanceAddrFunc);
+    // TODO reduce direct dependency on glfw here? pass the function pointers around?
+    const vk_proc = @as(*const fn (instance: vk.Instance, procname: [*:0]const u8) callconv(.C) vk.PfnVoidFunction, @ptrCast(&glfw.getInstanceProcAddress));
     self.vkb = try BaseDispatch.load(vk_proc);
 
     const app_info = vk.ApplicationInfo{
@@ -28,24 +44,109 @@ pub fn createInstance(glfwGetInstanceAddrFunc: *const fn (instance: vk.Instance,
         .api_version = vk.API_VERSION_1_2,
     };
 
+    const extensions = try getRequiredExtensions(allocator);
+    defer extensions.deinit();
+
     const create_info = vk.InstanceCreateInfo{
         .flags = .{},
         .p_application_info = &app_info,
         .enabled_layer_count = 0,
         .pp_enabled_layer_names = undefined,
-        .enabled_extension_count = @as(u32, @intCast(glfwExtensions.?.len)),
-        .pp_enabled_extension_names = glfwExtensions.?.ptr,
+        .enabled_extension_count = @as(u32, @intCast(extensions.items.len)),
+        .pp_enabled_extension_names = extensions.items.ptr,
     };
 
     self.instance = try self.vkb.createInstance(&create_info, null);
 
     self.vki = try InstanceDispatch.load(self.instance, vk_proc);
 
+    try self.setupDebugMessenger();
+
     return self;
 }
 
 pub fn destroyInstance(self: *Self) void {
+    if (enable_validation_layers and self.debug_messenger != .null_handle) {
+        self.vki.destroyDebugUtilsMessengerEXT(self.instance, self.debug_messenger, null);
+    }
+
     if (self.instance != .null_handle) {
         self.vki.destroyInstance(self.instance, null);
     }
+}
+
+fn getRequiredExtensions(allocator: Allocator) !std.ArrayListAligned([*:0]const u8, null) {
+    var extensions = std.ArrayList([*:0]const u8).init(allocator);
+    try extensions.appendSlice(@as([]const [*:0]const u8, glfw.getRequiredInstanceExtensions().?));
+
+    if (enable_validation_layers) {
+        try extensions.append(vk.extension_info.ext_debug_utils.name);
+    }
+
+    return extensions;
+}
+
+fn checkValidationLayerSupport(self: *Self) !bool {
+    var layer_count: u32 = undefined;
+    _ = try self.vkb.enumerateInstanceLayerProperties(&layer_count, null);
+
+    var available_layers = try self.allocator.alloc(vk.LayerProperties, layer_count);
+    defer self.allocator.free(available_layers);
+    _ = try self.vkb.enumerateInstanceLayerProperties(&layer_count, available_layers.ptr);
+
+    for (validation_layers) |layer_name| {
+        var layer_found: bool = false;
+
+        for (available_layers) |layer_properties| {
+            const available_len = std.mem.indexOfScalar(u8, &layer_properties.layer_name, 0).?;
+            const available_layer_name = layer_properties.layer_name[0..available_len];
+            if (std.mem.eql(u8, std.mem.span(layer_name), available_layer_name)) {
+                layer_found = true;
+                break;
+            }
+        }
+
+        if (!layer_found) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+fn setupDebugMessenger(self: *Self) !void {
+    if (!enable_validation_layers) {
+        return;
+    }
+
+    var create_info: vk.DebugUtilsMessengerCreateInfoEXT = undefined;
+    populateDebugMessengerCreateInfo(&create_info);
+
+    self.debug_messenger = try self.vki.createDebugUtilsMessengerEXT(self.instance, &create_info, null);
+}
+
+fn populateDebugMessengerCreateInfo(create_info: *vk.DebugUtilsMessengerCreateInfoEXT) void {
+    create_info.* = .{
+        .flags = .{},
+        .message_severity = .{
+            .verbose_bit_ext = true,
+            .warning_bit_ext = true,
+            .error_bit_ext = true,
+        },
+        .message_type = .{
+            .general_bit_ext = true,
+            .validation_bit_ext = true,
+            .performance_bit_ext = true,
+        },
+        .pfn_user_callback = debugCallback,
+        .p_user_data = null,
+    };
+}
+
+fn debugCallback(_: vk.DebugUtilsMessageSeverityFlagsEXT, _: vk.DebugUtilsMessageTypeFlagsEXT, p_callback_data: ?*const vk.DebugUtilsMessengerCallbackDataEXT, _: ?*anyopaque) callconv(vk.vulkan_call_conv) vk.Bool32 {
+    if (p_callback_data != null) {
+        std.log.debug("validation layer: {s}", .{p_callback_data.?.p_message});
+    }
+
+    return vk.FALSE;
 }
