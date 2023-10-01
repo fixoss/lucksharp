@@ -3,7 +3,6 @@ const std = @import("std");
 const renderer_vk = @import("renderer_vulkan.zig");
 
 const Allocator = std.mem.Allocator;
-const Error = error{ GlfwInitFailed, GlfwWindowCreateFailed };
 const Self = @This();
 
 allocator: Allocator,
@@ -38,7 +37,7 @@ fn initGlfw(self: *Self) !void {
     glfw.setErrorCallback(glfwErrorCallback);
 
     if (!glfw.init(.{})) {
-        return Error.GlfwInitFailed;
+        return error.GlfwInitFailed;
     }
 
     self.window = glfw.Window.create(640, 480, "lucksharp", null, null, .{
@@ -47,12 +46,12 @@ fn initGlfw(self: *Self) !void {
     });
 
     if (self.window == null) {
-        return Error.GlfwWindowCreateFailed;
+        return error.GlfwWindowCreateFailed;
     }
 }
 
 fn initRenderer(self: *Self) !void {
-    self.renderer = try renderer_vk.createInstance(self.allocator);
+    self.renderer = try renderer_vk.createInstance(self.allocator, self.window);
 }
 
 fn glfwErrorCallback(error_code: glfw.ErrorCode, description: [:0]const u8) void {

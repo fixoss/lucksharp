@@ -24,9 +24,11 @@ const InstanceDispatch = vk.InstanceWrapper(.{
     .createDevice = true,
     .destroyDebugUtilsMessengerEXT = enable_validation_layers,
     .destroyInstance = true,
+    .destroySurfaceKHR = true,
     .enumeratePhysicalDevices = true,
     .getDeviceProcAddr = true,
     .getPhysicalDeviceQueueFamilyProperties = true,
+    .getPhysicalDeviceSurfaceSupportKHR = true,
 });
 
 const DeviceDispatch = vk.DeviceWrapper(.{
@@ -36,9 +38,10 @@ const DeviceDispatch = vk.DeviceWrapper(.{
 
 const QueueFamilyIndices = struct {
     graphics_family: ?u32 = null,
+    present_family: ?u32 = null,
 
     fn isComplete(self: *const QueueFamilyIndices) bool {
-        return self.graphics_family != null;
+        return self.graphics_family != null and self.present_family != null;
     }
 };
 
@@ -47,11 +50,13 @@ vki: InstanceDispatch = undefined,
 vkd: DeviceDispatch = undefined,
 instance: vk.Instance = .null_handle,
 debug_messenger: vk.DebugUtilsMessengerEXT = .null_handle,
+surface: vk.SurfaceKHR = .null_handle,
 physical_device: vk.PhysicalDevice = .null_handle,
 device: vk.Device = .null_handle,
 graphics_queue: vk.Queue = .null_handle,
+present_queue: vk.Queue = .null_handle,
 
-pub fn createInstance(allocator: Allocator) !Self {
+pub fn createInstance(allocator: Allocator, glfw_window: ?glfw.Window) !Self {
     var self = Self{};
 
     // TODO reduce direct dependency on glfw here? pass the function pointers around?
@@ -83,6 +88,7 @@ pub fn createInstance(allocator: Allocator) !Self {
     self.vki = try InstanceDispatch.load(self.instance, vk_proc);
 
     try self.setupDebugMessenger();
+    try self.createSurface(glfw_window);
     try self.createPhysicalDevice(allocator);
     try self.createLogicalDevice(allocator);
 
@@ -96,6 +102,10 @@ pub fn destroyInstance(self: *Self) void {
 
     if (enable_validation_layers and self.debug_messenger != .null_handle) {
         self.vki.destroyDebugUtilsMessengerEXT(self.instance, self.debug_messenger, null);
+    }
+
+    if (self.surface != .null_handle) {
+        self.vki.destroySurfaceKHR(self.instance, self.surface, null);
     }
 
     if (self.instance != .null_handle) {
@@ -179,6 +189,13 @@ fn debugCallback(_: vk.DebugUtilsMessageSeverityFlagsEXT, _: vk.DebugUtilsMessag
     return vk.FALSE;
 }
 
+fn createSurface(self: *Self, glfw_window: ?glfw.Window) !void {
+    var result = glfw.createWindowSurface(self.instance, glfw_window.?, null, &self.surface);
+    if (result != @intFromEnum(vk.Result.success)) {
+        return error.SurfaceInitFailed;
+    }
+}
+
 fn createPhysicalDevice(self: *Self, allocator: Allocator) !void {
     var device_count: u32 = undefined;
     _ = try self.vki.enumeratePhysicalDevices(self.instance, &device_count, null);
@@ -207,12 +224,17 @@ fn createLogicalDevice(self: *Self, allocator: Allocator) !void {
     const indices = try self.findQueueFamilies(self.physical_device, allocator);
     const queue_priority = [_]f32{1};
 
-    var queue_create_info = [_]vk.DeviceQueueCreateInfo{.{
+    var queue_create_info = [_]vk.DeviceQueueCreateInfo{ .{
         .flags = .{},
         .queue_family_index = indices.graphics_family.?,
         .queue_count = 1,
         .p_queue_priorities = &queue_priority,
-    }};
+    }, .{
+        .flags = .{},
+        .queue_family_index = indices.present_family.?,
+        .queue_count = 1,
+        .p_queue_priorities = &queue_priority,
+    } };
 
     var create_info = vk.DeviceCreateInfo{
         .flags = .{},
@@ -226,6 +248,7 @@ fn createLogicalDevice(self: *Self, allocator: Allocator) !void {
     self.device = try self.vki.createDevice(self.physical_device, &create_info, null);
     self.vkd = try DeviceDispatch.load(self.device, self.vki.dispatch.vkGetDeviceProcAddr);
     self.graphics_queue = self.vkd.getDeviceQueue(self.device, indices.graphics_family.?, 0);
+    self.present_queue = self.vkd.getDeviceQueue(self.device, indices.present_family.?, 0);
 }
 
 fn isDeviceSuitable(self: *Self, device: vk.PhysicalDevice, allocator: Allocator) !bool {
@@ -235,21 +258,30 @@ fn isDeviceSuitable(self: *Self, device: vk.PhysicalDevice, allocator: Allocator
 
 fn findQueueFamilies(self: *Self, device: vk.PhysicalDevice, allocator: Allocator) !QueueFamilyIndices {
     var indices: QueueFamilyIndices = .{};
+
     var queue_family_count: u32 = 0;
     self.vki.getPhysicalDeviceQueueFamilyProperties(device, &queue_family_count, null);
 
     const queue_families = try allocator.alloc(vk.QueueFamilyProperties, queue_family_count);
     defer allocator.free(queue_families);
-
     self.vki.getPhysicalDeviceQueueFamilyProperties(device, &queue_family_count, queue_families.ptr);
 
     for (queue_families, 0..) |queue_family, i| {
-        if (queue_family.queue_flags.graphics_bit) {
+        if (indices.graphics_family == null and queue_family.queue_flags.graphics_bit) {
             indices.graphics_family = @as(u32, @intCast(i));
         }
+
+        if (indices.present_family == null) {
+            const supports_surface = (try self.vki.getPhysicalDeviceSurfaceSupportKHR(device, @as(u32, @intCast(i)), self.surface) == vk.TRUE);
+            if (supports_surface) {
+                indices.present_family = @as(u32, @intCast(i));
+            }
+        }
+
         if (indices.isComplete()) {
             break;
         }
     }
+
     return indices;
 }
