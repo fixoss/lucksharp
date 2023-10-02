@@ -39,10 +39,12 @@ const InstanceDispatch = vk.InstanceWrapper(.{
 
 const DeviceDispatch = vk.DeviceWrapper(.{
     .createImageView = true,
+    .createPipelineLayout = true,
     .createShaderModule = true,
     .createSwapchainKHR = true,
     .destroyDevice = true,
     .destroyImageView = true,
+    .destroyPipelineLayout = true,
     .destroyShaderModule = true,
     .destroySwapchainKHR = true,
     .getDeviceQueue = true,
@@ -88,6 +90,7 @@ swap_chain_images: ?[]vk.Image = null,
 swap_chain_image_format: vk.Format = .undefined,
 swap_chain_extent: vk.Extent2D = .{ .width = 0, .height = 0 },
 swap_chain_image_views: ?[]vk.ImageView = null,
+pipeline_layout: vk.PipelineLayout = .null_handle,
 
 pub fn createInstance(allocator: Allocator, glfw_window: ?glfw.Window) !Self {
     var self = Self{};
@@ -132,6 +135,10 @@ pub fn createInstance(allocator: Allocator, glfw_window: ?glfw.Window) !Self {
 }
 
 pub fn destroyInstance(self: *Self, allocator: Allocator) void {
+    if (self.pipeline_layout != .null_handle) {
+        self.vkd.destroyPipelineLayout(self.device, self.pipeline_layout, null);
+    }
+
     if (self.swap_chain_image_views != null) {
         for (self.swap_chain_image_views.?) |image_view| {
             self.vkd.destroyImageView(self.device, image_view, null);
@@ -468,7 +475,96 @@ fn createGraphicsPipeline(self: *Self) !void {
         .p_name = "main",
         .p_specialization_info = null,
     } };
-    std.log.debug("temp hold for compiler error on unused const for shader_stages: {}", .{shader_stages.len});
+
+    const vertex_input_info = vk.PipelineVertexInputStateCreateInfo{
+        .flags = .{},
+        .vertex_binding_description_count = 0,
+        .p_vertex_binding_descriptions = undefined,
+        .vertex_attribute_description_count = 0,
+        .p_vertex_attribute_descriptions = undefined,
+    };
+
+    const input_assembly = vk.PipelineInputAssemblyStateCreateInfo{
+        .flags = .{},
+        .topology = .triangle_list,
+        .primitive_restart_enable = vk.FALSE,
+    };
+
+    const viewport_state = vk.PipelineRasterizationStateCreateInfo{
+        .flags = .{},
+        .depth_clamp_enable = vk.FALSE,
+        .rasterizer_discard_enable = vk.FALSE,
+        .polygon_mode = .fill,
+        .cull_mode = .{ .back_bit = true },
+        .front_face = .clockwise,
+        .depth_bias_enable = vk.FALSE,
+        .depth_bias_constant_factor = 0,
+        .depth_bias_clamp = 0,
+        .depth_bias_slope_factor = 0,
+        .line_width = 1,
+    };
+
+    const rasterizer = vk.PipelineRasterizationStateCreateInfo{
+        .flags = .{},
+        .depth_clamp_enable = vk.FALSE,
+        .rasterizer_discard_enable = vk.FALSE,
+        .polygon_mode = .fill,
+        .cull_mode = .{ .back_bit = true },
+        .front_face = .clockwise,
+        .depth_bias_enable = vk.FALSE,
+        .depth_bias_constant_factor = 0,
+        .depth_bias_clamp = 0,
+        .depth_bias_slope_factor = 0,
+        .line_width = 1,
+    };
+
+    const multisampling = vk.PipelineMultisampleStateCreateInfo{
+        .flags = .{},
+        .rasterization_samples = .{ .@"1_bit" = true },
+        .sample_shading_enable = vk.FALSE,
+        .min_sample_shading = 1,
+        .p_sample_mask = null,
+        .alpha_to_coverage_enable = vk.FALSE,
+        .alpha_to_one_enable = vk.FALSE,
+    };
+
+    const colour_blend_attachment = [_]vk.PipelineColorBlendAttachmentState{.{
+        .blend_enable = vk.FALSE,
+        .src_color_blend_factor = .one,
+        .dst_color_blend_factor = .zero,
+        .color_blend_op = .add,
+        .src_alpha_blend_factor = .one,
+        .dst_alpha_blend_factor = .zero,
+        .alpha_blend_op = .add,
+        .color_write_mask = .{ .r_bit = true, .g_bit = true, .b_bit = true, .a_bit = true },
+    }};
+
+    const colour_blending = vk.PipelineColorBlendStateCreateInfo{
+        .flags = .{},
+        .logic_op_enable = vk.FALSE,
+        .logic_op = .copy,
+        .attachment_count = colour_blend_attachment.len,
+        .p_attachments = &colour_blend_attachment,
+        .blend_constants = [_]f32{ 0, 0, 0, 0 },
+    };
+
+    const dynamic_states = [_]vk.DynamicState{ .viewport, .scissor };
+
+    const dynamic_state = vk.PipelineDynamicStateCreateInfo{
+        .flags = .{},
+        .dynamic_state_count = dynamic_states.len,
+        .p_dynamic_states = &dynamic_states,
+    };
+
+    self.pipeline_layout = try self.vkd.createPipelineLayout(self.device, &.{
+        .flags = .{},
+        .set_layout_count = 0,
+        .p_set_layouts = undefined,
+        .push_constant_range_count = 0,
+        .p_push_constant_ranges = undefined,
+    }, null);
+
+    std.log.debug("temp hold for compiler errors: {any} {any} {any} {any} {any} {any} {any} {any}", .{ dynamic_state, colour_blending, multisampling, rasterizer, viewport_state, vertex_input_info, shader_stages, input_assembly });
 }
 
 fn createShaderModule(self: *Self, code: []const u8) !vk.ShaderModule {
