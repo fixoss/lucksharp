@@ -40,11 +40,13 @@ const InstanceDispatch = vk.InstanceWrapper(.{
 const DeviceDispatch = vk.DeviceWrapper(.{
     .createImageView = true,
     .createPipelineLayout = true,
+    .createRenderPass = true,
     .createShaderModule = true,
     .createSwapchainKHR = true,
     .destroyDevice = true,
     .destroyImageView = true,
     .destroyPipelineLayout = true,
+    .destroyRenderPass = true,
     .destroyShaderModule = true,
     .destroySwapchainKHR = true,
     .getDeviceQueue = true,
@@ -90,6 +92,7 @@ swap_chain_images: ?[]vk.Image = null,
 swap_chain_image_format: vk.Format = .undefined,
 swap_chain_extent: vk.Extent2D = .{ .width = 0, .height = 0 },
 swap_chain_image_views: ?[]vk.ImageView = null,
+render_pass: vk.RenderPass = .null_handle,
 pipeline_layout: vk.PipelineLayout = .null_handle,
 
 pub fn createInstance(allocator: Allocator, glfw_window: ?glfw.Window) !Self {
@@ -129,6 +132,7 @@ pub fn createInstance(allocator: Allocator, glfw_window: ?glfw.Window) !Self {
     try self.createLogicalDevice(allocator);
     try self.createSwapchain(allocator, glfw_window);
     try self.createImageViews(allocator);
+    try self.createRenderPass();
     try self.createGraphicsPipeline();
 
     return self;
@@ -137,6 +141,10 @@ pub fn createInstance(allocator: Allocator, glfw_window: ?glfw.Window) !Self {
 pub fn destroyInstance(self: *Self, allocator: Allocator) void {
     if (self.pipeline_layout != .null_handle) {
         self.vkd.destroyPipelineLayout(self.device, self.pipeline_layout, null);
+    }
+
+    if (self.render_pass != .null_handle) {
+        self.vkd.destroyRenderPass(self.device, self.render_pass, null);
     }
 
     if (self.swap_chain_image_views != null) {
@@ -453,6 +461,48 @@ fn findQueueFamilies(self: *Self, device: vk.PhysicalDevice, allocator: Allocato
     }
 
     return indices;
+}
+
+fn createRenderPass(self: *Self) !void {
+    const colour_attachment = [_]vk.AttachmentDescription{.{
+        .flags = .{},
+        .format = self.swap_chain_image_format,
+        .samples = .{ .@"1_bit" = true },
+        .load_op = .clear,
+        .store_op = .store,
+        .stencil_load_op = .dont_care,
+        .stencil_store_op = .dont_care,
+        .initial_layout = .undefined,
+        .final_layout = .present_src_khr,
+    }};
+
+    const colour_attachment_ref = [_]vk.AttachmentReference{.{
+        .attachment = 0,
+        .layout = .color_attachment_optimal,
+    }};
+
+    const subpass = [_]vk.SubpassDescription{.{
+        .flags = .{},
+        .pipeline_bind_point = .graphics,
+        .input_attachment_count = 0,
+        .p_input_attachments = undefined,
+        .color_attachment_count = colour_attachment_ref.len,
+        .p_color_attachments = &colour_attachment_ref,
+        .p_resolve_attachments = null,
+        .p_depth_stencil_attachment = null,
+        .preserve_attachment_count = 0,
+        .p_preserve_attachments = undefined,
+    }};
+
+    self.render_pass = try self.vkd.createRenderPass(self.device, &.{
+        .flags = .{},
+        .attachment_count = colour_attachment.len,
+        .p_attachments = &colour_attachment,
+        .subpass_count = subpass.len,
+        .p_subpasses = &subpass,
+        .dependency_count = 0,
+        .p_dependencies = undefined,
+    }, null);
 }
 
 fn createGraphicsPipeline(self: *Self) !void {
