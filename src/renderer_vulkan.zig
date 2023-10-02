@@ -38,12 +38,14 @@ const InstanceDispatch = vk.InstanceWrapper(.{
 });
 
 const DeviceDispatch = vk.DeviceWrapper(.{
+    .createGraphicsPipelines = true,
     .createImageView = true,
     .createPipelineLayout = true,
     .createRenderPass = true,
     .createShaderModule = true,
     .createSwapchainKHR = true,
     .destroyDevice = true,
+    .destroyPipeline = true,
     .destroyImageView = true,
     .destroyPipelineLayout = true,
     .destroyRenderPass = true,
@@ -94,6 +96,7 @@ swap_chain_extent: vk.Extent2D = .{ .width = 0, .height = 0 },
 swap_chain_image_views: ?[]vk.ImageView = null,
 render_pass: vk.RenderPass = .null_handle,
 pipeline_layout: vk.PipelineLayout = .null_handle,
+graphics_pipeline: vk.Pipeline = .null_handle,
 
 pub fn createInstance(allocator: Allocator, glfw_window: ?glfw.Window) !Self {
     var self = Self{};
@@ -139,6 +142,10 @@ pub fn createInstance(allocator: Allocator, glfw_window: ?glfw.Window) !Self {
 }
 
 pub fn destroyInstance(self: *Self, allocator: Allocator) void {
+    if (self.graphics_pipeline != .null_handle) {
+        self.vkd.destroyPipeline(self.device, self.graphics_pipeline, null);
+    }
+
     if (self.pipeline_layout != .null_handle) {
         self.vkd.destroyPipelineLayout(self.device, self.pipeline_layout, null);
     }
@@ -540,18 +547,12 @@ fn createGraphicsPipeline(self: *Self) !void {
         .primitive_restart_enable = vk.FALSE,
     };
 
-    const viewport_state = vk.PipelineRasterizationStateCreateInfo{
+    const viewport_state = vk.PipelineViewportStateCreateInfo{
         .flags = .{},
-        .depth_clamp_enable = vk.FALSE,
-        .rasterizer_discard_enable = vk.FALSE,
-        .polygon_mode = .fill,
-        .cull_mode = .{ .back_bit = true },
-        .front_face = .clockwise,
-        .depth_bias_enable = vk.FALSE,
-        .depth_bias_constant_factor = 0,
-        .depth_bias_clamp = 0,
-        .depth_bias_slope_factor = 0,
-        .line_width = 1,
+        .viewport_count = 1,
+        .p_viewports = undefined,
+        .scissor_count = 1,
+        .p_scissors = undefined,
     };
 
     const rasterizer = vk.PipelineRasterizationStateCreateInfo{
@@ -614,7 +615,27 @@ fn createGraphicsPipeline(self: *Self) !void {
         .p_push_constant_ranges = undefined,
     }, null);
 
-    std.log.debug("temp hold for compiler errors: {any} {any} {any} {any} {any} {any} {any} {any}", .{ dynamic_state, colour_blending, multisampling, rasterizer, viewport_state, vertex_input_info, shader_stages, input_assembly });
+    const pipeline_info = [_]vk.GraphicsPipelineCreateInfo{.{
+        .flags = .{},
+        .stage_count = shader_stages.len,
+        .p_stages = &shader_stages,
+        .p_vertex_input_state = &vertex_input_info,
+        .p_input_assembly_state = &input_assembly,
+        .p_tessellation_state = null,
+        .p_viewport_state = &viewport_state,
+        .p_rasterization_state = &rasterizer,
+        .p_multisample_state = &multisampling,
+        .p_depth_stencil_state = null,
+        .p_color_blend_state = &colour_blending,
+        .p_dynamic_state = &dynamic_state,
+        .layout = self.pipeline_layout,
+        .render_pass = self.render_pass,
+        .subpass = 0,
+        .base_pipeline_handle = .null_handle,
+        .base_pipeline_index = -1,
+    }};
+
+    _ = try self.vkd.createGraphicsPipelines(self.device, .null_handle, pipeline_info.len, &pipeline_info, null, @as([*]vk.Pipeline, @ptrCast(&self.graphics_pipeline)));
 }
 
 fn createShaderModule(self: *Self, code: []const u8) !vk.ShaderModule {
