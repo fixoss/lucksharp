@@ -37,8 +37,10 @@ const InstanceDispatch = vk.InstanceWrapper(.{
 });
 
 const DeviceDispatch = vk.DeviceWrapper(.{
+    .createImageView = true,
     .createSwapchainKHR = true,
     .destroyDevice = true,
+    .destroyImageView = true,
     .destroySwapchainKHR = true,
     .getDeviceQueue = true,
     .getSwapchainImagesKHR = true,
@@ -82,6 +84,7 @@ swap_chain: vk.SwapchainKHR = .null_handle,
 swap_chain_images: ?[]vk.Image = null,
 swap_chain_image_format: vk.Format = .undefined,
 swap_chain_extent: vk.Extent2D = .{ .width = 0, .height = 0 },
+swap_chain_image_views: ?[]vk.ImageView = null,
 
 pub fn createInstance(allocator: Allocator, glfw_window: ?glfw.Window) !Self {
     var self = Self{};
@@ -119,11 +122,19 @@ pub fn createInstance(allocator: Allocator, glfw_window: ?glfw.Window) !Self {
     try self.createPhysicalDevice(allocator);
     try self.createLogicalDevice(allocator);
     try self.createSwapchain(allocator, glfw_window);
+    try self.createImageViews(allocator);
 
     return self;
 }
 
 pub fn destroyInstance(self: *Self, allocator: Allocator) void {
+    if (self.swap_chain_image_views != null) {
+        for (self.swap_chain_image_views.?) |image_view| {
+            self.vkd.destroyImageView(self.device, image_view, null);
+        }
+        allocator.free(self.swap_chain_image_views.?);
+    }
+
     if (self.swap_chain_images != null) {
         allocator.free(self.swap_chain_images.?);
     }
@@ -146,6 +157,20 @@ pub fn destroyInstance(self: *Self, allocator: Allocator) void {
 
     if (self.instance != .null_handle) {
         self.vki.destroyInstance(self.instance, null);
+    }
+}
+
+fn createImageViews(self: *Self, allocator: Allocator) !void {
+    self.swap_chain_image_views = try allocator.alloc(vk.ImageView, self.swap_chain_images.?.len);
+
+    for (self.swap_chain_images.?, 0..) |image, i| {
+        self.swap_chain_image_views.?[i] = try self.vkd.createImageView(self.device, &.{ .flags = .{}, .image = image, .view_type = .@"2d", .format = self.swap_chain_image_format, .components = .{ .r = .identity, .g = .identity, .b = .identity, .a = .identity }, .subresource_range = .{
+            .aspect_mask = .{ .color_bit = true },
+            .base_mip_level = 0,
+            .level_count = 1,
+            .base_array_layer = 0,
+            .layer_count = 1,
+        } }, null);
     }
 }
 
