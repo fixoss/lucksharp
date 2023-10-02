@@ -24,6 +24,16 @@ pub fn build(b: *std.Build) void {
     const vulkan_gen = vkgen.VkGenerateStep.create(b, "/usr/share/vulkan/registry/vk.xml");
     exe.addModule("vulkan", vulkan_gen.getModule());
 
+    // register shader resources
+    const shader_compiler = vkgen.ShaderCompileStep.create(
+        b,
+        &[_][]const u8{ "glslc", "--target-env=vulkan1.2" },
+        "-o",
+    );
+    shader_compiler.add("shader_frag", "resources/shaders/example.frag", .{});
+    shader_compiler.add("shader_vert", "resources/shaders/example.vert", .{});
+    exe.addModule("shaders", shader_compiler.getModule());
+
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);

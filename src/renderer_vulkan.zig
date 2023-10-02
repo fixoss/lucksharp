@@ -2,6 +2,7 @@ const builtin = @import("builtin");
 const std = @import("std");
 const vk = @import("vulkan");
 const glfw = @import("glfw");
+const shaders = @import("shaders");
 
 const Allocator = std.mem.Allocator;
 
@@ -38,9 +39,11 @@ const InstanceDispatch = vk.InstanceWrapper(.{
 
 const DeviceDispatch = vk.DeviceWrapper(.{
     .createImageView = true,
+    .createShaderModule = true,
     .createSwapchainKHR = true,
     .destroyDevice = true,
     .destroyImageView = true,
+    .destroyShaderModule = true,
     .destroySwapchainKHR = true,
     .getDeviceQueue = true,
     .getSwapchainImagesKHR = true,
@@ -123,6 +126,7 @@ pub fn createInstance(allocator: Allocator, glfw_window: ?glfw.Window) !Self {
     try self.createLogicalDevice(allocator);
     try self.createSwapchain(allocator, glfw_window);
     try self.createImageViews(allocator);
+    try self.createGraphicsPipeline();
 
     return self;
 }
@@ -442,6 +446,37 @@ fn findQueueFamilies(self: *Self, device: vk.PhysicalDevice, allocator: Allocato
     }
 
     return indices;
+}
+
+fn createGraphicsPipeline(self: *Self) !void {
+    const vert_shader_module: vk.ShaderModule = try self.createShaderModule(&shaders.shader_vert);
+    defer self.vkd.destroyShaderModule(self.device, vert_shader_module, null);
+
+    const frag_shader_module: vk.ShaderModule = try self.createShaderModule(&shaders.shader_frag);
+    defer self.vkd.destroyShaderModule(self.device, frag_shader_module, null);
+
+    const shader_stages = [_]vk.PipelineShaderStageCreateInfo{ .{
+        .flags = .{},
+        .stage = .{ .vertex_bit = true },
+        .module = vert_shader_module,
+        .p_name = "main",
+        .p_specialization_info = null,
+    }, .{
+        .flags = .{},
+        .stage = .{ .fragment_bit = true },
+        .module = frag_shader_module,
+        .p_name = "main",
+        .p_specialization_info = null,
+    } };
+    std.log.debug("temp hold for compiler error on unused const for shader_stages: {}", .{shader_stages.len});
+}
+
+fn createShaderModule(self: *Self, code: []const u8) !vk.ShaderModule {
+    return try self.vkd.createShaderModule(self.device, &.{
+        .flags = .{},
+        .code_size = code.len,
+        .p_code = @as([*]const u32, @ptrCast(@alignCast(code))),
+    }, null);
 }
 
 fn chooseSwapSurfaceFormat(available_formats: []vk.SurfaceFormatKHR) vk.SurfaceFormatKHR {
