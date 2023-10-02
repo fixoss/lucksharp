@@ -18,7 +18,7 @@ pub fn init(allocator: Allocator) !Self {
 
 pub fn deinit(self: *Self) void {
     if (self.renderer != null) {
-        self.renderer.?.destroyInstance();
+        self.renderer.?.destroyInstance(self.allocator);
     }
 
     if (self.window != null) {

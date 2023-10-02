@@ -6,6 +6,7 @@ const glfw = @import("glfw");
 const Allocator = std.mem.Allocator;
 
 const validation_layers = [_][*:0]const u8{"VK_LAYER_KHRONOS_validation"};
+const required_device_extensions = [_][*:0]const u8{vk.extension_info.khr_swapchain.name};
 
 const enable_validation_layers: bool = switch (builtin.mode) {
     .Debug, .ReleaseSafe => true,
@@ -25,15 +26,22 @@ const InstanceDispatch = vk.InstanceWrapper(.{
     .destroyDebugUtilsMessengerEXT = enable_validation_layers,
     .destroyInstance = true,
     .destroySurfaceKHR = true,
+    .enumerateDeviceExtensionProperties = true,
     .enumeratePhysicalDevices = true,
     .getDeviceProcAddr = true,
     .getPhysicalDeviceQueueFamilyProperties = true,
+    .getPhysicalDeviceSurfaceCapabilitiesKHR = true,
+    .getPhysicalDeviceSurfaceFormatsKHR = true,
+    .getPhysicalDeviceSurfacePresentModesKHR = true,
     .getPhysicalDeviceSurfaceSupportKHR = true,
 });
 
 const DeviceDispatch = vk.DeviceWrapper(.{
+    .createSwapchainKHR = true,
     .destroyDevice = true,
+    .destroySwapchainKHR = true,
     .getDeviceQueue = true,
+    .getSwapchainImagesKHR = true,
 });
 
 const QueueFamilyIndices = struct {
@@ -42,6 +50,21 @@ const QueueFamilyIndices = struct {
 
     fn isComplete(self: *const QueueFamilyIndices) bool {
         return self.graphics_family != null and self.present_family != null;
+    }
+};
+
+const SwapchainSupportDetails = struct {
+    capabilities: vk.SurfaceCapabilitiesKHR = undefined,
+    formats: ?[]vk.SurfaceFormatKHR = null,
+    present_modes: ?[]vk.PresentModeKHR = null,
+
+    pub fn destroy(self: SwapchainSupportDetails, allocator: Allocator) void {
+        if (self.formats != null) {
+            allocator.free(self.formats.?);
+        }
+        if (self.present_modes != null) {
+            allocator.free(self.present_modes.?);
+        }
     }
 };
 
@@ -55,6 +78,10 @@ physical_device: vk.PhysicalDevice = .null_handle,
 device: vk.Device = .null_handle,
 graphics_queue: vk.Queue = .null_handle,
 present_queue: vk.Queue = .null_handle,
+swap_chain: vk.SwapchainKHR = .null_handle,
+swap_chain_images: ?[]vk.Image = null,
+swap_chain_image_format: vk.Format = .undefined,
+swap_chain_extent: vk.Extent2D = .{ .width = 0, .height = 0 },
 
 pub fn createInstance(allocator: Allocator, glfw_window: ?glfw.Window) !Self {
     var self = Self{};
@@ -91,11 +118,20 @@ pub fn createInstance(allocator: Allocator, glfw_window: ?glfw.Window) !Self {
     try self.createSurface(glfw_window);
     try self.createPhysicalDevice(allocator);
     try self.createLogicalDevice(allocator);
+    try self.createSwapchain(allocator, glfw_window);
 
     return self;
 }
 
-pub fn destroyInstance(self: *Self) void {
+pub fn destroyInstance(self: *Self, allocator: Allocator) void {
+    if (self.swap_chain_images != null) {
+        allocator.free(self.swap_chain_images.?);
+    }
+
+    if (self.swap_chain != .null_handle) {
+        self.vkd.destroySwapchainKHR(self.device, self.swap_chain, null);
+    }
+
     if (self.device != .null_handle) {
         self.vkd.destroyDevice(self.device, null);
     }
@@ -240,8 +276,8 @@ fn createLogicalDevice(self: *Self, allocator: Allocator) !void {
         .flags = .{},
         .queue_create_info_count = queue_create_info.len,
         .p_queue_create_infos = &queue_create_info,
-        .enabled_extension_count = 0,
-        .pp_enabled_extension_names = undefined,
+        .enabled_extension_count = required_device_extensions.len,
+        .pp_enabled_extension_names = &required_device_extensions,
         .p_enabled_features = null,
     };
 
@@ -251,9 +287,106 @@ fn createLogicalDevice(self: *Self, allocator: Allocator) !void {
     self.present_queue = self.vkd.getDeviceQueue(self.device, indices.present_family.?, 0);
 }
 
+fn createSwapchain(self: *Self, allocator: Allocator, glfw_window: ?glfw.Window) !void {
+    const swap_chain_support = try self.querySwapchainSupport(self.physical_device, allocator);
+    defer swap_chain_support.destroy(allocator);
+
+    const surface_format: vk.SurfaceFormatKHR = chooseSwapSurfaceFormat(swap_chain_support.formats.?);
+    const present_mode: vk.PresentModeKHR = chooseSwapPresentMode(swap_chain_support.present_modes.?);
+    const extent: vk.Extent2D = try chooseSwapExtent(glfw_window, swap_chain_support.capabilities);
+
+    var image_count = swap_chain_support.capabilities.min_image_count + 1;
+    if (swap_chain_support.capabilities.max_image_count > 0) {
+        image_count = @min(image_count, swap_chain_support.capabilities.max_image_count);
+    }
+
+    const indices = try self.findQueueFamilies(self.physical_device, allocator);
+    const queue_family_indices = [_]u32{ indices.graphics_family.?, indices.present_family.? };
+    const sharing_mode: vk.SharingMode = if (indices.graphics_family.? != indices.present_family.?) .concurrent else .exclusive;
+
+    self.swap_chain = try self.vkd.createSwapchainKHR(self.device, &.{
+        .flags = .{},
+        .surface = self.surface,
+        .min_image_count = image_count,
+        .image_format = surface_format.format,
+        .image_color_space = surface_format.color_space,
+        .image_extent = extent,
+        .image_array_layers = 1,
+        .image_usage = .{ .color_attachment_bit = true },
+        .image_sharing_mode = sharing_mode,
+        .queue_family_index_count = queue_family_indices.len,
+        .p_queue_family_indices = &queue_family_indices,
+        .pre_transform = swap_chain_support.capabilities.current_transform,
+        .composite_alpha = .{ .opaque_bit_khr = true },
+        .present_mode = present_mode,
+        .clipped = vk.TRUE,
+        .old_swapchain = .null_handle,
+    }, null);
+
+    _ = try self.vkd.getSwapchainImagesKHR(self.device, self.swap_chain, &image_count, null);
+    self.swap_chain_images = try allocator.alloc(vk.Image, image_count);
+    _ = try self.vkd.getSwapchainImagesKHR(self.device, self.swap_chain, &image_count, self.swap_chain_images.?.ptr);
+
+    self.swap_chain_image_format = surface_format.format;
+    self.swap_chain_extent = extent;
+}
+
+fn querySwapchainSupport(self: *Self, device: vk.PhysicalDevice, allocator: Allocator) !SwapchainSupportDetails {
+    var details = SwapchainSupportDetails{};
+    details.capabilities = try self.vki.getPhysicalDeviceSurfaceCapabilitiesKHR(device, self.surface);
+
+    var format_count: u32 = undefined;
+    _ = try self.vki.getPhysicalDeviceSurfaceFormatsKHR(device, self.surface, &format_count, null);
+
+    if (format_count != 0) {
+        details.formats = try allocator.alloc(vk.SurfaceFormatKHR, format_count);
+        _ = try self.vki.getPhysicalDeviceSurfaceFormatsKHR(device, self.surface, &format_count, details.formats.?.ptr);
+    }
+
+    var present_mode_count: u32 = undefined;
+    _ = try self.vki.getPhysicalDeviceSurfacePresentModesKHR(device, self.surface, &present_mode_count, null);
+
+    if (present_mode_count != 0) {
+        details.present_modes = try allocator.alloc(vk.PresentModeKHR, present_mode_count);
+        _ = try self.vki.getPhysicalDeviceSurfacePresentModesKHR(device, self.surface, &present_mode_count, details.present_modes.?.ptr);
+    }
+
+    return details;
+}
+
 fn isDeviceSuitable(self: *Self, device: vk.PhysicalDevice, allocator: Allocator) !bool {
     const indices = try self.findQueueFamilies(device, allocator);
-    return indices.isComplete();
+
+    const extensions_supported = try self.checkDeviceExtensionSupport(device, allocator);
+    var swap_chain_adequate = false;
+    if (extensions_supported) {
+        const swap_chain_support = try self.querySwapchainSupport(device, allocator);
+        defer swap_chain_support.destroy(allocator);
+
+        swap_chain_adequate = swap_chain_support.formats != null and swap_chain_support.present_modes != null;
+    }
+    return indices.isComplete() and extensions_supported and swap_chain_adequate;
+}
+
+fn checkDeviceExtensionSupport(self: *Self, device: vk.PhysicalDevice, allocator: Allocator) !bool {
+    var extension_count: u32 = undefined;
+    _ = try self.vki.enumerateDeviceExtensionProperties(device, null, &extension_count, null);
+
+    var available_extensions = try allocator.alloc(vk.ExtensionProperties, extension_count);
+    defer allocator.free(available_extensions);
+    _ = try self.vki.enumerateDeviceExtensionProperties(device, null, &extension_count, available_extensions.ptr);
+
+    for (required_device_extensions) |required_extension| {
+        for (available_extensions) |available_extension| {
+            if (std.mem.eql(u8, std.mem.span(required_extension), std.mem.sliceTo(&available_extension.extension_name, 0))) {
+                break;
+            }
+        } else {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 fn findQueueFamilies(self: *Self, device: vk.PhysicalDevice, allocator: Allocator) !QueueFamilyIndices {
@@ -284,4 +417,35 @@ fn findQueueFamilies(self: *Self, device: vk.PhysicalDevice, allocator: Allocato
     }
 
     return indices;
+}
+
+fn chooseSwapSurfaceFormat(available_formats: []vk.SurfaceFormatKHR) vk.SurfaceFormatKHR {
+    for (available_formats) |available_format| {
+        if (available_format.format == .b8g8r8a8_srgb and available_format.color_space == .srgb_nonlinear_khr) {
+            return available_format;
+        }
+    }
+    return available_formats[0];
+}
+
+fn chooseSwapPresentMode(available_present_modes: []vk.PresentModeKHR) vk.PresentModeKHR {
+    for (available_present_modes) |available_present_mode| {
+        if (available_present_mode == .mailbox_khr) {
+            return available_present_mode;
+        }
+    }
+    return .fifo_khr;
+}
+
+fn chooseSwapExtent(glfw_window: ?glfw.Window, capabilities: vk.SurfaceCapabilitiesKHR) !vk.Extent2D {
+    if (capabilities.current_extent.width != 0xFFFF_FFFF) {
+        return capabilities.current_extent;
+    } else {
+        const window_size = glfw_window.?.getFramebufferSize();
+
+        return vk.Extent2D{
+            .width = std.math.clamp(window_size.width, capabilities.min_image_extent.width, capabilities.max_image_extent.width),
+            .height = std.math.clamp(window_size.height, capabilities.min_image_extent.height, capabilities.max_image_extent.height),
+        };
+    }
 }
