@@ -38,6 +38,7 @@ const InstanceDispatch = vk.InstanceWrapper(.{
 });
 
 const DeviceDispatch = vk.DeviceWrapper(.{
+    .createFramebuffer = true,
     .createGraphicsPipelines = true,
     .createImageView = true,
     .createPipelineLayout = true,
@@ -45,6 +46,7 @@ const DeviceDispatch = vk.DeviceWrapper(.{
     .createShaderModule = true,
     .createSwapchainKHR = true,
     .destroyDevice = true,
+    .destroyFramebuffer = true,
     .destroyPipeline = true,
     .destroyImageView = true,
     .destroyPipelineLayout = true,
@@ -94,6 +96,7 @@ swap_chain_images: ?[]vk.Image = null,
 swap_chain_image_format: vk.Format = .undefined,
 swap_chain_extent: vk.Extent2D = .{ .width = 0, .height = 0 },
 swap_chain_image_views: ?[]vk.ImageView = null,
+swap_chain_framebuffers: ?[]vk.Framebuffer = null,
 render_pass: vk.RenderPass = .null_handle,
 pipeline_layout: vk.PipelineLayout = .null_handle,
 graphics_pipeline: vk.Pipeline = .null_handle,
@@ -137,11 +140,19 @@ pub fn createInstance(allocator: Allocator, glfw_window: ?glfw.Window) !Self {
     try self.createImageViews(allocator);
     try self.createRenderPass();
     try self.createGraphicsPipeline();
+    try self.createFramebuffers(allocator);
 
     return self;
 }
 
 pub fn destroyInstance(self: *Self, allocator: Allocator) void {
+    if (self.swap_chain_framebuffers != null) {
+        for (self.swap_chain_framebuffers.?) |framebuffer| {
+            self.vkd.destroyFramebuffer(self.device, framebuffer, null);
+        }
+        allocator.free(self.swap_chain_framebuffers.?);
+    }
+
     if (self.graphics_pipeline != .null_handle) {
         self.vkd.destroyPipeline(self.device, self.graphics_pipeline, null);
     }
@@ -636,6 +647,24 @@ fn createGraphicsPipeline(self: *Self) !void {
     }};
 
     _ = try self.vkd.createGraphicsPipelines(self.device, .null_handle, pipeline_info.len, &pipeline_info, null, @as([*]vk.Pipeline, @ptrCast(&self.graphics_pipeline)));
+}
+
+fn createFramebuffers(self: *Self, allocator: Allocator) !void {
+    self.swap_chain_framebuffers = try allocator.alloc(vk.Framebuffer, self.swap_chain_image_views.?.len);
+
+    for (self.swap_chain_framebuffers.?, 0..) |*framebuffer, i| {
+        const attachments = [_]vk.ImageView{self.swap_chain_image_views.?[i]};
+
+        framebuffer.* = try self.vkd.createFramebuffer(self.device, &.{
+            .flags = .{},
+            .render_pass = self.render_pass,
+            .attachment_count = attachments.len,
+            .p_attachments = &attachments,
+            .width = self.swap_chain_extent.width,
+            .height = self.swap_chain_extent.height,
+            .layers = 1,
+        }, null);
+    }
 }
 
 fn createShaderModule(self: *Self, code: []const u8) !vk.ShaderModule {
