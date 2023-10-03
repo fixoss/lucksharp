@@ -38,6 +38,14 @@ const InstanceDispatch = vk.InstanceWrapper(.{
 });
 
 const DeviceDispatch = vk.DeviceWrapper(.{
+    .allocateCommandBuffers = true,
+    .cmdBeginRenderPass = true,
+    .cmdBindPipeline = true,
+    .cmdDraw = true,
+    .cmdEndRenderPass = true,
+    .cmdSetViewport = true,
+    .cmdSetScissor = true,
+    .createCommandPool = true,
     .createFramebuffer = true,
     .createGraphicsPipelines = true,
     .createImageView = true,
@@ -45,6 +53,7 @@ const DeviceDispatch = vk.DeviceWrapper(.{
     .createRenderPass = true,
     .createShaderModule = true,
     .createSwapchainKHR = true,
+    .destroyCommandPool = true,
     .destroyDevice = true,
     .destroyFramebuffer = true,
     .destroyPipeline = true,
@@ -100,6 +109,8 @@ swap_chain_framebuffers: ?[]vk.Framebuffer = null,
 render_pass: vk.RenderPass = .null_handle,
 pipeline_layout: vk.PipelineLayout = .null_handle,
 graphics_pipeline: vk.Pipeline = .null_handle,
+command_pool: vk.CommandPool = .null_handle,
+command_buffer: vk.CommandBuffer = .null_handle,
 
 pub fn createInstance(allocator: Allocator, glfw_window: ?glfw.Window) !Self {
     var self = Self{};
@@ -141,11 +152,17 @@ pub fn createInstance(allocator: Allocator, glfw_window: ?glfw.Window) !Self {
     try self.createRenderPass();
     try self.createGraphicsPipeline();
     try self.createFramebuffers(allocator);
+    try self.createCommandPool(allocator);
+    try self.createCommandBuffer();
 
     return self;
 }
 
 pub fn destroyInstance(self: *Self, allocator: Allocator) void {
+    if (self.command_pool != .null_handle) {
+        self.vkd.destroyCommandPool(self.device, self.command_pool, null);
+    }
+
     if (self.swap_chain_framebuffers != null) {
         for (self.swap_chain_framebuffers.?) |framebuffer| {
             self.vkd.destroyFramebuffer(self.device, framebuffer, null);
@@ -665,6 +682,72 @@ fn createFramebuffers(self: *Self, allocator: Allocator) !void {
             .layers = 1,
         }, null);
     }
+}
+
+fn createCommandPool(self: *Self, allocator: Allocator) !void {
+    const queue_family_indices = try self.findQueueFamilies(self.physical_device, allocator);
+
+    self.command_pool = try self.vkd.createCommandPool(self.device, &.{
+        .flags = .{ .reset_command_buffer_bit = true },
+        .queue_family_index = queue_family_indices.graphics_family.?,
+    }, null);
+}
+
+fn createCommandBuffer(self: *Self) !void {
+    try self.vkd.allocateCommandBuffers(self.device, &.{
+        .command_pool = self.command_pool,
+        .level = .primary,
+        .command_buffer_count = 1,
+    }, @as([*]vk.CommandBuffer, @ptrCast(&self.command_buffer)));
+}
+
+fn recordCommandBuffer(self: *Self, command_buffer: vk.CommandBuffer, image_index: u32) !void {
+    try self.vkd.beginCommandBuffer(command_buffer, &.{
+        .flags = .{},
+        .p_inheritance_info = null,
+    });
+
+    const clear_values = [_]vk.ClearValue{.{
+        .color = .{ .float_32 = .{ 0, 0, 0, 1 } },
+    }};
+
+    const render_pass_info = vk.RenderPassBeginInfo{
+        .render_pass = self.render_pass,
+        .framebuffer = self.swap_chain_framebuffers.?[image_index],
+        .render_area = vk.Rect2D{
+            .offset = .{ .x = 0, .y = 0 },
+            .extent = self.swap_chain_extent,
+        },
+        .clear_value_count = clear_values.len,
+        .p_clear_values = &clear_values,
+    };
+
+    self.vkd.cmdBeginRenderPass(command_buffer, &render_pass_info, .@"inline");
+
+    {
+        self.vkd.cmdBindPipeline(command_buffer, .graphics, self.graphics_pipeline);
+
+        const viewports = [_]vk.Viewport{.{
+            .x = 0,
+            .y = 0,
+            .width = @as(f32, @floatFromInt(self.swap_chain_extent.width)),
+            .height = @as(f32, @floatFromInt(self.swap_chain_extent.height)),
+            .min_depth = 0,
+            .max_depth = 1,
+        }};
+        self.vkd.cmdSetViewport(command_buffer, 0, viewports.len, &viewports);
+
+        const scissors = [_]vk.Rect2D{.{
+            .offset = .{ .x = 0, .y = 0 },
+            .extent = self.swap_chain_extent,
+        }};
+        self.vkd.cmdSetScissor(command_buffer, 0, scissors.len, &scissors);
+
+        self.vkd.cmdDraw(command_buffer, 3, 1, 0, 0);
+    }
+    self.vkd.cmdEndRenderPass(command_buffer);
+
+    try self.vkd.endCommandBuffer(command_buffer);
 }
 
 fn createShaderModule(self: *Self, code: []const u8) !vk.ShaderModule {
