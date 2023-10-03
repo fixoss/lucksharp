@@ -30,7 +30,9 @@ pub fn deinit(self: *Self) void {
 pub fn run(self: *Self) !void {
     while (!self.window.?.shouldClose()) {
         glfw.pollEvents();
+        try self.renderer.?.renderFrame();
     }
+    try self.renderer.?.waitForIdle();
 }
 
 fn initGlfw(self: *Self) !void {

@@ -6,6 +6,8 @@ const shaders = @import("shaders");
 
 const Allocator = std.mem.Allocator;
 
+const MAX_FRAMES_IN_FLIGHT: u32 = 2;
+
 const validation_layers = [_][*:0]const u8{"VK_LAYER_KHRONOS_validation"};
 const required_device_extensions = [_][*:0]const u8{vk.extension_info.khr_swapchain.name};
 
@@ -38,7 +40,9 @@ const InstanceDispatch = vk.InstanceWrapper(.{
 });
 
 const DeviceDispatch = vk.DeviceWrapper(.{
+    .acquireNextImageKHR = true,
     .allocateCommandBuffers = true,
+    .beginCommandBuffer = true,
     .cmdBeginRenderPass = true,
     .cmdBindPipeline = true,
     .cmdDraw = true,
@@ -46,24 +50,35 @@ const DeviceDispatch = vk.DeviceWrapper(.{
     .cmdSetViewport = true,
     .cmdSetScissor = true,
     .createCommandPool = true,
+    .createFence = true,
     .createFramebuffer = true,
     .createGraphicsPipelines = true,
     .createImageView = true,
     .createPipelineLayout = true,
     .createRenderPass = true,
+    .createSemaphore = true,
     .createShaderModule = true,
     .createSwapchainKHR = true,
     .destroyCommandPool = true,
     .destroyDevice = true,
+    .destroyFence = true,
     .destroyFramebuffer = true,
     .destroyPipeline = true,
     .destroyImageView = true,
     .destroyPipelineLayout = true,
     .destroyRenderPass = true,
+    .destroySemaphore = true,
     .destroyShaderModule = true,
     .destroySwapchainKHR = true,
+    .deviceWaitIdle = true,
+    .endCommandBuffer = true,
     .getDeviceQueue = true,
     .getSwapchainImagesKHR = true,
+    .queuePresentKHR = true,
+    .queueSubmit = true,
+    .resetCommandBuffer = true,
+    .resetFences = true,
+    .waitForFences = true,
 });
 
 const QueueFamilyIndices = struct {
@@ -111,6 +126,9 @@ pipeline_layout: vk.PipelineLayout = .null_handle,
 graphics_pipeline: vk.Pipeline = .null_handle,
 command_pool: vk.CommandPool = .null_handle,
 command_buffer: vk.CommandBuffer = .null_handle,
+image_available_semaphore: vk.Semaphore = .null_handle,
+render_finished_semaphore: vk.Semaphore = .null_handle,
+in_flight_fence: vk.Fence = .null_handle,
 
 pub fn createInstance(allocator: Allocator, glfw_window: ?glfw.Window) !Self {
     var self = Self{};
@@ -154,11 +172,63 @@ pub fn createInstance(allocator: Allocator, glfw_window: ?glfw.Window) !Self {
     try self.createFramebuffers(allocator);
     try self.createCommandPool(allocator);
     try self.createCommandBuffer();
+    try self.createSyncObjects();
 
     return self;
 }
 
+pub fn renderFrame(self: *Self) !void {
+    _ = try self.vkd.waitForFences(self.device, 1, @as([*]const vk.Fence, @ptrCast(&self.in_flight_fence)), vk.TRUE, std.math.maxInt(u64));
+    try self.vkd.resetFences(self.device, 1, @as([*]const vk.Fence, @ptrCast(&self.in_flight_fence)));
+
+    const result = try self.vkd.acquireNextImageKHR(self.device, self.swap_chain, std.math.maxInt(u64), self.image_available_semaphore, .null_handle);
+
+    try self.vkd.resetCommandBuffer(self.command_buffer, .{});
+    try self.recordCommandBuffer(self.command_buffer, result.image_index);
+
+    const wait_semaphores = [_]vk.Semaphore{self.image_available_semaphore};
+    const wait_stages = [_]vk.PipelineStageFlags{.{ .color_attachment_output_bit = true }};
+    const signal_semaphores = [_]vk.Semaphore{self.render_finished_semaphore};
+
+    const submit_info = vk.SubmitInfo{
+        .wait_semaphore_count = wait_semaphores.len,
+        .p_wait_semaphores = &wait_semaphores,
+        .p_wait_dst_stage_mask = &wait_stages,
+        .command_buffer_count = 1,
+        .p_command_buffers = @as([*]const vk.CommandBuffer, @ptrCast(&self.command_buffer)),
+        .signal_semaphore_count = signal_semaphores.len,
+        .p_signal_semaphores = &signal_semaphores,
+    };
+
+    _ = try self.vkd.queueSubmit(self.graphics_queue, 1, &[_]vk.SubmitInfo{submit_info}, self.in_flight_fence);
+
+    _ = try self.vkd.queuePresentKHR(self.present_queue, &.{
+        .wait_semaphore_count = signal_semaphores.len,
+        .p_wait_semaphores = &signal_semaphores,
+        .swapchain_count = 1,
+        .p_swapchains = @as([*]const vk.SwapchainKHR, @ptrCast(&self.swap_chain)),
+        .p_image_indices = @as([*]const u32, @ptrCast(&result.image_index)),
+        .p_results = null,
+    });
+}
+
+pub fn waitForIdle(self: *Self) !void {
+    _ = try self.vkd.deviceWaitIdle(self.device);
+}
+
 pub fn destroyInstance(self: *Self, allocator: Allocator) void {
+    if (self.render_finished_semaphore != .null_handle) {
+        self.vkd.destroySemaphore(self.device, self.render_finished_semaphore, null);
+    }
+
+    if (self.image_available_semaphore != .null_handle) {
+        self.vkd.destroySemaphore(self.device, self.image_available_semaphore, null);
+    }
+
+    if (self.in_flight_fence != .null_handle) {
+        self.vkd.destroyFence(self.device, self.in_flight_fence, null);
+    }
+
     if (self.command_pool != .null_handle) {
         self.vkd.destroyCommandPool(self.device, self.command_pool, null);
     }
@@ -748,6 +818,12 @@ fn recordCommandBuffer(self: *Self, command_buffer: vk.CommandBuffer, image_inde
     self.vkd.cmdEndRenderPass(command_buffer);
 
     try self.vkd.endCommandBuffer(command_buffer);
+}
+
+fn createSyncObjects(self: *Self) !void {
+    self.image_available_semaphore = try self.vkd.createSemaphore(self.device, &.{ .flags = .{} }, null);
+    self.render_finished_semaphore = try self.vkd.createSemaphore(self.device, &.{ .flags = .{} }, null);
+    self.in_flight_fence = try self.vkd.createFence(self.device, &.{ .flags = .{ .signaled_bit = true } }, null);
 }
 
 fn createShaderModule(self: *Self, code: []const u8) !vk.ShaderModule {
