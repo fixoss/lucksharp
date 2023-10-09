@@ -1,6 +1,6 @@
 .{
     .name = "lucksharp",
-    .version = "0.0.1",
+    .version = "0.0.2",
     .dependencies = .{
         .mach_glfw = .{
             .url = "https://pkg.machengine.org/mach-glfw/321efd4.tar.gz",
@@ -9,6 +9,10 @@
         .vulkan_zig = .{
             .url = "https://github.com/Snektron/vulkan-zig/archive/348ac5d.tar.gz",
             .hash = "1220279b91d5bd17fe583dfb5d6d720ea5b06ee6dc0de30b04320780f89c408587e3",
+        },
+        .imgui_zig = .{
+            .url = "https://github.com/joshua-software-dev/Zig-ImGui/archive/d20e556.tar.gz",
+            .hash = "12202984b5a977b8f2e8727f1beccdc4b3da537330128ad05f8523b57577e80126df",
         },
     },
 }

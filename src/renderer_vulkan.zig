@@ -130,7 +130,7 @@ image_available_semaphore: vk.Semaphore = .null_handle,
 render_finished_semaphore: vk.Semaphore = .null_handle,
 in_flight_fence: vk.Fence = .null_handle,
 
-pub fn createInstance(allocator: Allocator, glfw_window: ?glfw.Window) !Self {
+pub fn init(allocator: Allocator, glfw_window: ?glfw.Window) !Self {
     var self = Self{};
 
     // TODO reduce direct dependency on glfw here? pass the function pointers around?
@@ -216,7 +216,7 @@ pub fn waitForIdle(self: *Self) !void {
     _ = try self.vkd.deviceWaitIdle(self.device);
 }
 
-pub fn destroyInstance(self: *Self, allocator: Allocator) void {
+pub fn deinit(self: *Self, allocator: Allocator) void {
     if (self.render_finished_semaphore != .null_handle) {
         self.vkd.destroySemaphore(self.device, self.render_finished_semaphore, null);
     }
